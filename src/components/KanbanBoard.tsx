@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -28,6 +28,12 @@ type ActiveItem =
   | { type: 'column'; column: Column }
   | null;
 
+interface DragOverInfo {
+  activeCardId: string;
+  toColumnId: string;
+  toIndex: number;
+}
+
 export const KanbanBoard = () => {
   const boards = useStore((s) => s.boards);
   const columns = useStore((s) => s.columns);
@@ -38,11 +44,25 @@ export const KanbanBoard = () => {
   const createColumn = useStore((s) => s.createColumn);
 
   const [activeItem, setActiveItem] = useState<ActiveItem>(null);
+  const [dragOverInfo, setDragOverInfo] = useState<DragOverInfo | null>(null);
 
-  const initialCardPos = useRef<{ columnId: string; index: number } | null>(null);
+  const initialCardPos = useRef<{
+    cardId: string;
+    columnId: string;
+    index: number;
+  } | null>(null);
 
   const board = boards[currentBoardId];
   const boardColumnIds = board ? board.columnIds : [];
+
+  const columnCardIdsMap = useMemo(() => {
+    const m: Record<string, readonly string[]> = {};
+    for (const cid of boardColumnIds) {
+      const col = columns[cid];
+      if (col) m[cid] = col.cardIds;
+    }
+    return m;
+  }, [boardColumnIds, columns]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -51,12 +71,13 @@ export const KanbanBoard = () => {
     })
   );
 
-  const findColumnForCard = (cardId: string): string | null => {
+  const findColumnForCard = (
+    cardId: string,
+    map: Record<string, readonly string[]>
+  ): string | null => {
     for (const colId of boardColumnIds) {
-      const col = columns[colId];
-      if (col && col.cardIds.includes(cardId)) {
-        return colId;
-      }
+      const ids = map[colId];
+      if (ids && ids.includes(cardId)) return colId;
     }
     return null;
   };
@@ -70,11 +91,17 @@ export const KanbanBoard = () => {
       const card = cards[active.id as string];
       if (card) {
         setActiveItem({ type: 'card', card });
-        const fromColumnId = findColumnForCard(card.id);
+        const fromColumnId = findColumnForCard(card.id, columnCardIdsMap);
         if (fromColumnId) {
-          const fromCol = columns[fromColumnId];
-          const fromIndex = fromCol.cardIds.indexOf(card.id);
-          initialCardPos.current = { columnId: fromColumnId, index: fromIndex };
+          const ids = columnCardIdsMap[fromColumnId];
+          const fromIndex = ids.indexOf(card.id);
+          if (fromIndex !== -1) {
+            initialCardPos.current = {
+              cardId: card.id,
+              columnId: fromColumnId,
+              index: fromIndex,
+            };
+          }
         }
       }
     } else if (activeData.type === 'column') {
@@ -87,55 +114,56 @@ export const KanbanBoard = () => {
 
   const onDragOver = (event: DragOverEvent) => {
     const { active, over } = event;
-    if (!over || active.id === over.id) return;
+    if (activeItem?.type === 'card') {
+      if (!over || active.id === over.id) {
+        setDragOverInfo(null);
+        return;
+      }
+      const activeData = active.data.current;
+      if (!activeData || activeData.type !== 'card') {
+        setDragOverInfo(null);
+        return;
+      }
+      const activeCardId = active.id as string;
+      const overData = over.data.current;
+      let toColumnId: string | null = null;
+      let toIndex: number = 0;
 
-    const activeData = active.data.current;
-    if (!activeData || activeData.type !== 'card') return;
-
-    const activeCardId = active.id as string;
-    const fromColumnId = findColumnForCard(activeCardId);
-    if (!fromColumnId) return;
-
-    const overData = over.data.current;
-    let toColumnId: string | null = null;
-
-    if (overData && overData.type === 'column') {
-      toColumnId = over.id as string;
-    } else if (overData && overData.type === 'card') {
-      const overCardId = over.id as string;
-      toColumnId = findColumnForCard(overCardId);
-    } else {
+      if (overData?.type === 'column') {
+        toColumnId = over.id as string;
+        const ids = columnCardIdsMap[toColumnId];
+        toIndex = ids ? ids.length : 0;
+      } else if (overData?.type === 'card') {
+        const overCardId = over.id as string;
+        const overColId = findColumnForCard(overCardId, columnCardIdsMap);
+        if (!overColId) {
+          setDragOverInfo(null);
+          return;
+        }
+        toColumnId = overColId;
+        const ids = columnCardIdsMap[overColId];
+        const overCardIndex = ids.indexOf(overCardId);
+        toIndex = overCardIndex === -1 ? ids.length : overCardIndex;
+      } else {
+        setDragOverInfo(null);
+        return;
+      }
+      if (!toColumnId) {
+        setDragOverInfo(null);
+        return;
+      }
+      setDragOverInfo({ activeCardId, toColumnId, toIndex });
       return;
     }
-
-    if (!toColumnId) return;
-
-    if (fromColumnId === toColumnId) return;
-
-    const fromCol = columns[fromColumnId];
-    const fromIndex = fromCol.cardIds.indexOf(activeCardId);
-    if (fromIndex === -1) return;
-
-    let toIndex: number;
-    const toCol = columns[toColumnId];
-
-    if (overData.type === 'column') {
-      toIndex = toCol.cardIds.length;
-    } else {
-      const overCardId = over.id as string;
-      toIndex = toCol.cardIds.indexOf(overCardId);
-      if (toIndex === -1) toIndex = toCol.cardIds.length;
-    }
-
-    moveCard(fromColumnId, toColumnId, fromIndex, toIndex);
+    setDragOverInfo(null);
   };
 
   const onDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
-    setActiveItem(null);
-
     const initial = initialCardPos.current;
     initialCardPos.current = null;
+    setActiveItem(null);
+    setDragOverInfo(null);
 
     if (!over || active.id === over.id) return;
 
@@ -145,10 +173,8 @@ export const KanbanBoard = () => {
     if (activeData.type === 'column') {
       const activeColumnId = active.id as string;
       const overColumnId = over.id as string;
-
       const fromIndex = boardColumnIds.indexOf(activeColumnId);
       const toIndex = boardColumnIds.indexOf(overColumnId);
-
       if (fromIndex !== -1 && toIndex !== -1 && fromIndex !== toIndex) {
         moveColumn(currentBoardId, fromIndex, toIndex);
       }
@@ -156,57 +182,62 @@ export const KanbanBoard = () => {
     }
 
     if (activeData.type === 'card') {
-      const activeCardId = active.id as string;
-      const currentColumnId = findColumnForCard(activeCardId);
-      if (!currentColumnId) return;
+      if (!initial) return;
+      const store = useStore.getState();
+      const storeColumns = store.columns;
+      const storeBoards = store.boards;
+      const storeBoard = storeBoards[currentBoardId];
+      if (!storeBoard) return;
+      const findCol = (cid: string): string | null => {
+        for (const colId of storeBoard.columnIds) {
+          const col = storeColumns[colId];
+          if (col && col.cardIds.includes(cid)) return colId;
+        }
+        return null;
+      };
 
-      const currentCol = columns[currentColumnId];
-      const currentCardIndex = currentCol.cardIds.indexOf(activeCardId);
-      if (currentCardIndex === -1) return;
-
+      let finalToColumnId: string;
+      let finalToIndex: number;
       const overData = over.data.current;
 
-      if (!initial) return;
-
-      if (initial.columnId === currentColumnId) {
-        let targetIndex: number | null = null;
-
-        if (overData?.type === 'card') {
-          const overCardId = over.id as string;
-          const overColId = findColumnForCard(overCardId);
-          if (overColId !== currentColumnId) return;
-          const overCardIndex = currentCol.cardIds.indexOf(overCardId);
-          if (overCardIndex === -1 || overCardIndex === currentCardIndex) return;
-          targetIndex = overCardIndex;
-        } else if (overData?.type === 'column') {
-          if (over.id !== currentColumnId) return;
-          targetIndex = currentCol.cardIds.length - 1;
-        } else {
-          return;
-        }
-
-        if (targetIndex === null || targetIndex === currentCardIndex) return;
-
-        const movedIds = arrayMove(currentCol.cardIds, currentCardIndex, targetIndex);
-        const finalIndex = movedIds.indexOf(activeCardId);
-        moveCard(currentColumnId, currentColumnId, currentCardIndex, finalIndex);
+      if (overData?.type === 'column') {
+        finalToColumnId = over.id as string;
+        const toCol = storeColumns[finalToColumnId];
+        if (!toCol) return;
+        finalToIndex = toCol.cardIds.length;
+      } else if (overData?.type === 'card') {
+        const overCardId = over.id as string;
+        const overColId = findCol(overCardId);
+        if (!overColId) return;
+        finalToColumnId = overColId;
+        const toCol = storeColumns[finalToColumnId];
+        const idx = toCol.cardIds.indexOf(overCardId);
+        finalToIndex = idx === -1 ? toCol.cardIds.length : idx;
       } else {
-        let finalIndex: number | null = null;
-        if (overData?.type === 'card') {
-          const overCardId = over.id as string;
-          if (over.id === active.id) return;
-          const overColId = findColumnForCard(overCardId);
-          if (overColId !== currentColumnId) return;
-          finalIndex = currentCol.cardIds.indexOf(overCardId);
-          if (finalIndex === -1) finalIndex = currentCol.cardIds.length;
-        } else if (overData?.type === 'column') {
-          if (over.id !== currentColumnId) return;
-          finalIndex = currentCol.cardIds.length;
-        }
+        return;
+      }
 
-        if (finalIndex !== null && finalIndex !== currentCardIndex) {
-          moveCard(currentColumnId, currentColumnId, currentCardIndex, finalIndex);
-        }
+      const fromColNow = storeColumns[initial.columnId];
+      if (!fromColNow) return;
+      const currentFromIndex = fromColNow.cardIds.indexOf(initial.cardId);
+      const fromIndexFinal =
+        currentFromIndex === -1 ? initial.index : currentFromIndex;
+
+      if (initial.columnId === finalToColumnId) {
+        const ids = Array.from(fromColNow.cardIds);
+        const idx = ids.indexOf(initial.cardId);
+        if (idx === -1) return;
+        if (idx === finalToIndex) return;
+        const moved = arrayMove(ids, idx, finalToIndex);
+        const realTo = moved.indexOf(initial.cardId);
+        moveCard(initial.columnId, finalToColumnId, idx, realTo);
+      } else {
+        const targetCol = storeColumns[finalToColumnId];
+        if (!targetCol) return;
+        let target = finalToIndex;
+        if (target < 0) target = 0;
+        if (target > targetCol.cardIds.length) target = targetCol.cardIds.length;
+        moveCard(initial.columnId, finalToColumnId, fromIndexFinal, target);
       }
     }
   };
@@ -235,7 +266,20 @@ export const KanbanBoard = () => {
             {boardColumnIds.map((colId) => {
               const col = columns[colId];
               if (!col) return null;
-              return <KanbanColumn key={colId} column={col} />;
+              const colDragOver =
+                dragOverInfo && dragOverInfo.toColumnId === colId
+                  ? {
+                      activeCardId: dragOverInfo.activeCardId,
+                      index: dragOverInfo.toIndex,
+                    }
+                  : null;
+              return (
+                <KanbanColumn
+                  key={colId}
+                  column={col}
+                  dragOverInfo={colDragOver}
+                />
+              );
             })}
 
             <button
@@ -248,7 +292,7 @@ export const KanbanBoard = () => {
           </div>
         </SortableContext>
 
-        <DragOverlay>
+        <DragOverlay dropAnimation={null}>
           {activeItem?.type === 'card' && (
             <KanbanCard card={activeItem.card} />
           )}

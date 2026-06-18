@@ -8,11 +8,17 @@ import { VirtualList } from './VirtualList';
 import { EmptyState } from './EmptyState';
 import type { Column } from '../types';
 
-interface KanbanColumnProps {
-  column: Column;
+interface ColumnDragOverInfo {
+  activeCardId: string;
+  index: number;
 }
 
-export const KanbanColumn = ({ column }: KanbanColumnProps) => {
+interface KanbanColumnProps {
+  column: Column;
+  dragOverInfo: ColumnDragOverInfo | null;
+}
+
+export const KanbanColumn = ({ column, dragOverInfo }: KanbanColumnProps) => {
   const cards = useStore((s) => s.cards);
   const createCard = useStore((s) => s.createCard);
   const renameColumn = useStore((s) => s.renameColumn);
@@ -157,9 +163,44 @@ export const KanbanColumn = ({ column }: KanbanColumnProps) => {
     return <KanbanCard key={cardId} card={card} />;
   };
 
+  const placeholder = (
+    <div
+      key="__drag_placeholder__"
+      className="rounded-lg border-2 border-dashed border-indigo-400 bg-indigo-50/50 min-h-[60px] flex items-center justify-center"
+    >
+      <span className="text-xs font-medium text-indigo-500">松手放置卡片</span>
+    </div>
+  );
+
   const useVirtual = cardCount > 50;
 
-  const cardListContent = cardCount === 0 ? (
+  const buildCardListWithPlaceholder = (ids: readonly string[]) => {
+    if (!dragOverInfo) {
+      return ids.map((id) => renderCard(id));
+    }
+    const result: React.ReactNode[] = [];
+    const { activeCardId, index } = dragOverInfo;
+    let inserted = false;
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      if (id === activeCardId) continue;
+      if (!inserted && i === index) {
+        result.push(placeholder);
+        inserted = true;
+      }
+      result.push(renderCard(id));
+    }
+    if (!inserted) {
+      if (index >= ids.length) {
+        result.push(placeholder);
+      } else {
+        result.push(placeholder);
+      }
+    }
+    return result;
+  };
+
+  const cardListContent = cardCount === 0 && !dragOverInfo ? (
     <EmptyState />
   ) : useVirtual ? (
     <SortableContext items={filteredCardIds} strategy={verticalListSortingStrategy}>
@@ -179,7 +220,7 @@ export const KanbanColumn = ({ column }: KanbanColumnProps) => {
   ) : (
     <SortableContext items={filteredCardIds} strategy={verticalListSortingStrategy}>
       <div className="flex flex-col gap-2">
-        {filteredCardIds.map((cardId) => renderCard(cardId))}
+        {buildCardListWithPlaceholder(filteredCardIds)}
       </div>
     </SortableContext>
   );
@@ -188,7 +229,9 @@ export const KanbanColumn = ({ column }: KanbanColumnProps) => {
     <div
       ref={setNodeRef}
       style={style}
-      className="bg-slate-100 rounded-xl w-[300px] min-w-[300px] max-w-[300px] flex flex-col max-h-[calc(100vh-5rem)]"
+      className={`bg-slate-100 rounded-xl w-[300px] min-w-[300px] max-w-[300px] flex flex-col max-h-[calc(100vh-5rem)] transition-colors ${
+        dragOverInfo ? 'ring-2 ring-indigo-300 ring-offset-1' : ''
+      }`}
     >
       <div
         className={`px-3 py-2.5 flex items-center justify-between rounded-t-xl transition-colors ${
