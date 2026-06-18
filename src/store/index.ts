@@ -541,8 +541,10 @@ export const useStore = create<Store>()(
         };
 
         const newColumns = { ...s.columns };
-        newColumns[fromColumnId] = { ...fromCol, cardIds: newFromIds };
-        if (fromColumnId !== toColumnId) {
+        if (fromColumnId === toColumnId) {
+          newColumns[fromColumnId] = { ...fromCol, cardIds: newToIds };
+        } else {
+          newColumns[fromColumnId] = { ...fromCol, cardIds: newFromIds };
           newColumns[toColumnId] = { ...toCol, cardIds: newToIds };
         }
 
