@@ -250,6 +250,7 @@ export const CardDetail = () => {
   return (
     <AnimatePresence>
       <motion.div
+        key="card-detail-backdrop"
         className="fixed inset-0 z-40"
         onClick={handleClose}
         initial={{ opacity: 0 }}
@@ -261,6 +262,7 @@ export const CardDetail = () => {
       </motion.div>
 
       <motion.div
+        key="card-detail-panel"
         initial={{ x: 480 }}
         animate={{ x: 0 }}
         exit={{ x: 480 }}

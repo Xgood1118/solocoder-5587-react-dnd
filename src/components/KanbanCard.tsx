@@ -40,7 +40,6 @@ export const KanbanCard = ({ card }: KanbanCardProps) => {
     <motion.div
       ref={setNodeRef}
       style={style}
-      layoutId={card.id}
       tabIndex={0}
       data-card-id={card.id}
       data-column-id={card.columnId}

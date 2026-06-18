@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -39,12 +39,10 @@ export const KanbanBoard = () => {
 
   const [activeItem, setActiveItem] = useState<ActiveItem>(null);
 
-  const board = boards[currentBoardId];
+  const initialCardPos = useRef<{ columnId: string; index: number } | null>(null);
 
-  const boardColumnIds = useMemo(
-    () => (board ? board.columnIds : []),
-    [board]
-  );
+  const board = boards[currentBoardId];
+  const boardColumnIds = board ? board.columnIds : [];
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -72,6 +70,12 @@ export const KanbanBoard = () => {
       const card = cards[active.id as string];
       if (card) {
         setActiveItem({ type: 'card', card });
+        const fromColumnId = findColumnForCard(card.id);
+        if (fromColumnId) {
+          const fromCol = columns[fromColumnId];
+          const fromIndex = fromCol.cardIds.indexOf(card.id);
+          initialCardPos.current = { columnId: fromColumnId, index: fromIndex };
+        }
       }
     } else if (activeData.type === 'column') {
       const column = columns[active.id as string];
@@ -92,43 +96,46 @@ export const KanbanBoard = () => {
     const fromColumnId = findColumnForCard(activeCardId);
     if (!fromColumnId) return;
 
-    const fromCol = columns[fromColumnId];
-    const fromIndex = fromCol.cardIds.indexOf(activeCardId);
-    if (fromIndex === -1) return;
-
     const overData = over.data.current;
-    let toColumnId: string;
-    let toIndex: number;
+    let toColumnId: string | null = null;
 
     if (overData && overData.type === 'column') {
       toColumnId = over.id as string;
-      const toCol = columns[toColumnId];
-      toIndex = toCol.cardIds.length;
     } else if (overData && overData.type === 'card') {
       const overCardId = over.id as string;
-      const overColId = findColumnForCard(overCardId);
-      if (!overColId) return;
-      toColumnId = overColId;
-      const toCol = columns[toColumnId];
-      const overCardIndex = toCol.cardIds.indexOf(overCardId);
-      toIndex = overCardIndex;
+      toColumnId = findColumnForCard(overCardId);
     } else {
       return;
     }
 
-    if (fromColumnId === toColumnId && fromIndex === toIndex) return;
+    if (!toColumnId) return;
 
-    const adjustedToIndex =
-      fromColumnId === toColumnId && toIndex > fromIndex
-        ? toIndex
-        : toIndex;
+    if (fromColumnId === toColumnId) return;
 
-    moveCard(fromColumnId, toColumnId, fromIndex, adjustedToIndex);
+    const fromCol = columns[fromColumnId];
+    const fromIndex = fromCol.cardIds.indexOf(activeCardId);
+    if (fromIndex === -1) return;
+
+    let toIndex: number;
+    const toCol = columns[toColumnId];
+
+    if (overData.type === 'column') {
+      toIndex = toCol.cardIds.length;
+    } else {
+      const overCardId = over.id as string;
+      toIndex = toCol.cardIds.indexOf(overCardId);
+      if (toIndex === -1) toIndex = toCol.cardIds.length;
+    }
+
+    moveCard(fromColumnId, toColumnId, fromIndex, toIndex);
   };
 
   const onDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     setActiveItem(null);
+
+    const initial = initialCardPos.current;
+    initialCardPos.current = null;
 
     if (!over || active.id === over.id) return;
 
@@ -150,49 +157,57 @@ export const KanbanBoard = () => {
 
     if (activeData.type === 'card') {
       const activeCardId = active.id as string;
-      const fromColumnId = findColumnForCard(activeCardId);
-      if (!fromColumnId) return;
+      const currentColumnId = findColumnForCard(activeCardId);
+      if (!currentColumnId) return;
 
-      const fromCol = columns[fromColumnId];
-      const fromIndex = fromCol.cardIds.indexOf(activeCardId);
-      if (fromIndex === -1) return;
+      const currentCol = columns[currentColumnId];
+      const currentCardIndex = currentCol.cardIds.indexOf(activeCardId);
+      if (currentCardIndex === -1) return;
 
       const overData = over.data.current;
-      let toColumnId: string;
-      let toIndex: number;
 
-      if (overData && overData.type === 'column') {
-        toColumnId = over.id as string;
-        const toCol = columns[toColumnId];
-        toIndex = toCol.cardIds.indexOf(activeCardId);
-        if (toIndex === -1) {
-          toIndex = toCol.cardIds.length;
-        }
-      } else if (overData && overData.type === 'card') {
-        const overCardId = over.id as string;
-        const overColId = findColumnForCard(overCardId);
-        if (!overColId) return;
-        toColumnId = overColId;
-        const toCol = columns[toColumnId];
-        const overCardIndex = toCol.cardIds.indexOf(overCardId);
-        const currentCardIndex = toCol.cardIds.indexOf(activeCardId);
+      if (!initial) return;
 
-        if (fromColumnId === toColumnId) {
-          if (currentCardIndex !== -1 && currentCardIndex !== overCardIndex) {
-            const ids = arrayMove(toCol.cardIds, currentCardIndex, overCardIndex);
-            const newFrom = ids.indexOf(activeCardId);
-            moveCard(fromColumnId, toColumnId, fromIndex, newFrom);
-          }
+      if (initial.columnId === currentColumnId) {
+        let targetIndex: number | null = null;
+
+        if (overData?.type === 'card') {
+          const overCardId = over.id as string;
+          const overColId = findColumnForCard(overCardId);
+          if (overColId !== currentColumnId) return;
+          const overCardIndex = currentCol.cardIds.indexOf(overCardId);
+          if (overCardIndex === -1 || overCardIndex === currentCardIndex) return;
+          targetIndex = overCardIndex;
+        } else if (overData?.type === 'column') {
+          if (over.id !== currentColumnId) return;
+          targetIndex = currentCol.cardIds.length - 1;
+        } else {
           return;
         }
 
-        toIndex = overCardIndex;
-      } else {
-        return;
-      }
+        if (targetIndex === null || targetIndex === currentCardIndex) return;
 
-      if (fromColumnId === toColumnId && fromIndex === toIndex) return;
-      moveCard(fromColumnId, toColumnId, fromIndex, toIndex);
+        const movedIds = arrayMove(currentCol.cardIds, currentCardIndex, targetIndex);
+        const finalIndex = movedIds.indexOf(activeCardId);
+        moveCard(currentColumnId, currentColumnId, currentCardIndex, finalIndex);
+      } else {
+        let finalIndex: number | null = null;
+        if (overData?.type === 'card') {
+          const overCardId = over.id as string;
+          if (over.id === active.id) return;
+          const overColId = findColumnForCard(overCardId);
+          if (overColId !== currentColumnId) return;
+          finalIndex = currentCol.cardIds.indexOf(overCardId);
+          if (finalIndex === -1) finalIndex = currentCol.cardIds.length;
+        } else if (overData?.type === 'column') {
+          if (over.id !== currentColumnId) return;
+          finalIndex = currentCol.cardIds.length;
+        }
+
+        if (finalIndex !== null && finalIndex !== currentCardIndex) {
+          moveCard(currentColumnId, currentColumnId, currentCardIndex, finalIndex);
+        }
+      }
     }
   };
 
